@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE struts PUBLIC
+    "-//Apache Software Foundation//DTD Struts Configuration 2.5//EN"
+    "http://struts.apache.org/dtds/struts-2.5.dtd">
+
+<struts>
+    <constant name="struts.devMode" value="true" />
+    <constant name="struts.objectFactory" value="spring" />
+
+    <package name="default" extends="struts-default" namespace="/">
+        <action name="cards" class="com.coreissuer.admin.action.CardAction" method="list">
+            <result name="success">/WEB-INF/views/cards.jsp</result>
+        </action>
+
+        <action name="updateCardStatus" class="com.coreissuer.admin.action.CardAction" method="updateStatus">
+            <result name="success" type="redirectAction">
+                <param name="actionName">cards</param>
+            </result>
+        </action>
+    </package>
+</struts>
