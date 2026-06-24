@@ -48,5 +48,8 @@ bin/
 # Mac
 .DS_Store
 
+# Environment secrets
+.env
+
 # Misc
 *.swp
