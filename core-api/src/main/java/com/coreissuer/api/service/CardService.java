@@ -2,6 +2,7 @@ package com.coreissuer.api.service;
 
 import com.coreissuer.api.dto.CardResponse;
 import com.coreissuer.api.dto.ProvisionCardRequest;
+import com.coreissuer.api.exception.CardNotFoundException;
 import com.coreissuer.common.domain.Account;
 import com.coreissuer.common.domain.AccountType;
 import com.coreissuer.common.domain.Card;
@@ -21,7 +22,7 @@ public class CardService {
     private final AccountRepository accountRepository;
     private final CardFactory cardFactory;
 
-    @Value("${coreissuer.security.pepper:default-secret-pepper}")
+    @Value("${coreissuer.security.pepper}")
     private String pepper;
 
     @Transactional
@@ -45,7 +46,7 @@ public class CardService {
     @Transactional(readOnly = true)
     public CardResponse getCard(String id) {
         Card card = cardRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Card not found"));
+                .orElseThrow(() -> new CardNotFoundException(id));
         return mapToResponse(card, card.getAccount());
     }
 

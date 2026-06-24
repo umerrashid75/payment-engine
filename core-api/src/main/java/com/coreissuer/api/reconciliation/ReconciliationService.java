@@ -3,6 +3,8 @@ package com.coreissuer.api.reconciliation;
 import com.coreissuer.common.domain.LedgerEntry;
 import com.coreissuer.common.repository.LedgerEntryRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ReconciliationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReconciliationService.class);
 
     private final LedgerEntryRepository ledgerEntryRepository;
 
@@ -76,7 +80,7 @@ public class ReconciliationService {
 
             TreeMap<LocalDate, BigDecimal> volumeByDate = new TreeMap<>();
             for (LedgerEntry e : mEntry.getValue()) {
-                LocalDate date = e.getCreatedAt().toLocalDate();
+                LocalDate date = e.getPostedAt().toLocalDate();
                 // Net volume: Credits minus Debits for merchant
                 BigDecimal amount = "C".equals(e.getDirection()) ? e.getAmount() : e.getAmount().negate();
                 volumeByDate.merge(date, amount, BigDecimal::add);
@@ -101,7 +105,8 @@ public class ReconciliationService {
         try (PrintWriter out = new PrintWriter(new FileWriter(file))) {
             out.print(report);
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("Failed to write reconciliation report to {}", file, e);
+            throw new ReconciliationReportException("Failed to write reconciliation report", e);
         }
     }
 }

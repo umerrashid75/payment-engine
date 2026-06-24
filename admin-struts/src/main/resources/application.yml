@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: admin-struts
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/coreissuer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USER:coreissuer}
+    password: ${DB_PASSWORD:coreissuer}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+  flyway:
+    enabled: false  # core-api owns migrations
+
+server:
+  port: ${SERVER_PORT:8081}
+
+logging:
+  level:
+    com.coreissuer: INFO

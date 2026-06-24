@@ -1,0 +1,49 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: coreissuer
+      MYSQL_USER: coreissuer
+      MYSQL_PASSWORD: coreissuer
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "coreissuer", "-pcoreissuer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  core-api:
+    build:
+      context: .
+      dockerfile: core-api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/coreissuer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      DB_USER: coreissuer
+      DB_PASSWORD: coreissuer
+      COREISSUER_PEPPER: ${COREISSUER_PEPPER}
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  admin-struts:
+    build:
+      context: .
+      dockerfile: admin-struts/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/coreissuer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      DB_USER: coreissuer
+      DB_PASSWORD: coreissuer
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

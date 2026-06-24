@@ -3,6 +3,10 @@ package com.coreissuer.api.service;
 import com.coreissuer.api.dto.AuthorizeRequest;
 import com.coreissuer.api.dto.AuthorizeResponse;
 import com.coreissuer.api.event.TransactionEvent;
+import com.coreissuer.api.exception.AccountNotFoundException;
+import com.coreissuer.api.exception.AuthorizationStrategyNotFoundException;
+import com.coreissuer.api.exception.CardNotFoundException;
+import com.coreissuer.api.exception.TransactionNotFoundException;
 import com.coreissuer.api.fraud.FraudCheck;
 import com.coreissuer.api.fraud.FraudResult;
 import com.coreissuer.api.strategy.AuthorizationStrategy;
@@ -13,6 +17,8 @@ import com.coreissuer.common.repository.LedgerEntryRepository;
 import com.coreissuer.common.repository.TransactionRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +30,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class TransactionService {
 
+    private static final Logger log = LoggerFactory.getLogger(TransactionService.class);
+
     private final CardRepository cardRepository;
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
@@ -33,22 +41,17 @@ public class TransactionService {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
-    // Hardcoded network settlement account id for now based on seed data
     private static final String NETWORK_SETTLEMENT_ACCOUNT_ID = "acc-network-settle";
-    // Assuming merchant 1 for demo purposes
-    private static final String MERCHANT_ACCOUNT_ID = "acc-merchant-1";
 
     @Transactional
     public AuthorizeResponse authorize(AuthorizeRequest request) {
-        // Find card
         Card card = cardRepository.findById(request.getCardId())
-                .orElseThrow(() -> new RuntimeException("Card not found"));
+                .orElseThrow(() -> new CardNotFoundException(request.getCardId()));
 
         if (!CardStatus.ACTIVE.name().equals(card.getStatus())) {
             return buildDeclineResponse(request, card, "CARD_NOT_ACTIVE");
         }
 
-        // Run Fraud Checks (Chain of Responsibility)
         for (FraudCheck check : fraudChecks) {
             FraudResult result = check.check(request);
             if (!result.isPass()) {
@@ -56,17 +59,13 @@ public class TransactionService {
             }
         }
 
-        // Lock the cardholder's account pessimistically
         Account account = accountRepository.findByIdForUpdate(card.getAccount().getId())
-                .orElseThrow(() -> new RuntimeException("Account not found"));
+                .orElseThrow(() -> new AccountNotFoundException(card.getAccount().getId()));
 
-        // Determine strategy
-        // In a real system, we'd lookup merchant details to get country.
-        // Assuming US merchant for domestic by default here for simplicity
         AuthorizationStrategy strategy = strategies.stream()
                 .filter(s -> s.supports(request.getCurrency(), "US"))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("No suitable authorization strategy found"));
+                .orElseThrow(() -> new AuthorizationStrategyNotFoundException(request.getCurrency(), "US"));
 
         BigDecimal fee = strategy.computeFee(request.getAmount());
         BigDecimal totalAmount = request.getAmount().add(fee);
@@ -80,7 +79,6 @@ public class TransactionService {
             return buildDeclineResponse(request, card, "INSUFFICIENT_FUNDS");
         }
 
-        // Proceed to authorize
         account.setAvailableBalance(account.getAvailableBalance().subtract(totalAmount));
         accountRepository.save(account);
 
@@ -93,9 +91,8 @@ public class TransactionService {
         transaction.setStatus(TransactionStatus.AUTHORIZED.name());
         transaction = transactionRepository.save(transaction);
 
-        // Double-entry ledger writes
         Account networkAccount = accountRepository.findByIdForUpdate(NETWORK_SETTLEMENT_ACCOUNT_ID)
-                .orElseThrow(() -> new RuntimeException("Network settlement account missing"));
+                .orElseThrow(() -> new AccountNotFoundException(NETWORK_SETTLEMENT_ACCOUNT_ID));
         networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().add(totalAmount));
         accountRepository.save(networkAccount);
 
@@ -143,7 +140,7 @@ public class TransactionService {
     @Transactional
     public void capture(String transactionId) {
         Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new RuntimeException("Transaction not found"));
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
         TransactionStateMachine.validateTransition(
                 TransactionStatus.valueOf(transaction.getStatus()),
@@ -151,14 +148,15 @@ public class TransactionService {
         );
 
         Account networkAccount = accountRepository.findByIdForUpdate(NETWORK_SETTLEMENT_ACCOUNT_ID)
-                .orElseThrow();
-        Account merchantAccount = accountRepository.findByIdForUpdate(MERCHANT_ACCOUNT_ID)
-                .orElseThrow();
+                .orElseThrow(() -> new AccountNotFoundException(NETWORK_SETTLEMENT_ACCOUNT_ID));
+        String merchantAccountId = resolveMerchantAccountId(transaction.getMerchantId());
+        Account merchantAccount = accountRepository.findByIdForUpdate(merchantAccountId)
+                .orElseThrow(() -> new AccountNotFoundException(merchantAccountId));
 
         networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(transaction.getAmount()));
         merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().add(transaction.getAmount()));
         merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().add(transaction.getAmount()));
-        
+
         accountRepository.save(networkAccount);
         accountRepository.save(merchantAccount);
 
@@ -171,7 +169,7 @@ public class TransactionService {
     @Transactional
     public void reverse(String transactionId) {
         Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new RuntimeException("Transaction not found"));
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
         TransactionStateMachine.validateTransition(
                 TransactionStatus.valueOf(transaction.getStatus()),
@@ -179,13 +177,14 @@ public class TransactionService {
         );
 
         Account networkAccount = accountRepository.findByIdForUpdate(NETWORK_SETTLEMENT_ACCOUNT_ID)
-                .orElseThrow();
-        Account cardholderAccount = accountRepository.findByIdForUpdate(transaction.getCard().getAccount().getId())
-                .orElseThrow();
+                .orElseThrow(() -> new AccountNotFoundException(NETWORK_SETTLEMENT_ACCOUNT_ID));
+        String cardholderAccountId = transaction.getCard().getAccount().getId();
+        Account cardholderAccount = accountRepository.findByIdForUpdate(cardholderAccountId)
+                .orElseThrow(() -> new AccountNotFoundException(cardholderAccountId));
 
         networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(transaction.getAmount()));
         cardholderAccount.setAvailableBalance(cardholderAccount.getAvailableBalance().add(transaction.getAmount()));
-        
+
         accountRepository.save(networkAccount);
         accountRepository.save(cardholderAccount);
 
@@ -198,17 +197,19 @@ public class TransactionService {
     @Transactional
     public void refund(String transactionId) {
         Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new RuntimeException("Transaction not found"));
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
         TransactionStateMachine.validateTransition(
                 TransactionStatus.valueOf(transaction.getStatus()),
                 TransactionStatus.REFUNDED
         );
 
-        Account merchantAccount = accountRepository.findByIdForUpdate(MERCHANT_ACCOUNT_ID)
-                .orElseThrow();
-        Account cardholderAccount = accountRepository.findByIdForUpdate(transaction.getCard().getAccount().getId())
-                .orElseThrow();
+        String merchantAccountId = resolveMerchantAccountId(transaction.getMerchantId());
+        Account merchantAccount = accountRepository.findByIdForUpdate(merchantAccountId)
+                .orElseThrow(() -> new AccountNotFoundException(merchantAccountId));
+        String cardholderAccountId = transaction.getCard().getAccount().getId();
+        Account cardholderAccount = accountRepository.findByIdForUpdate(cardholderAccountId)
+                .orElseThrow(() -> new AccountNotFoundException(cardholderAccountId));
 
         merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().subtract(transaction.getAmount()));
         merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().subtract(transaction.getAmount()));
@@ -238,7 +239,7 @@ public class TransactionService {
         credit.setDirection(creditDir);
         credit.setAmount(amount);
         ledgerEntryRepository.save(credit);
-        
+
         publishEvent(tx);
     }
 
@@ -247,8 +248,12 @@ public class TransactionService {
             String payload = objectMapper.writeValueAsString(tx);
             eventPublisher.publishEvent(new TransactionEvent(this, tx.getId(), tx.getStatus(), payload));
         } catch (Exception e) {
-            // Log error, but don't fail the transaction
-            System.err.println("Failed to serialize transaction event: " + e.getMessage());
+            log.error("Failed to serialize transaction event txId={}", tx.getId(), e);
         }
+    }
+
+    // TODO: replace with a real merchant->account mapping table.
+    private String resolveMerchantAccountId(String merchantId) {
+        return "acc-merchant-" + merchantId;
     }
 }
