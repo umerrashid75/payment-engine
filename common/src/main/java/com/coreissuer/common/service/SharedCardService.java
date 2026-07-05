@@ -16,7 +16,7 @@ public class SharedCardService {
     private final CardRepository cardRepository;
 
     public List<Card> findAll() {
-        return cardRepository.findAll();
+        return cardRepository.findAllWithAccounts();
     }
 
     @Transactional

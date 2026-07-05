@@ -89,6 +89,14 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Testcontainers' docker-java client pins Docker API 1.32, which
+                             Docker Engine 29+ rejects (minimum 1.44). 1.44 is accepted by
+                             Engine 25 through 29+. -->
+                        <api.version>1.44</api.version>
+                    </systemPropertyVariables>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>

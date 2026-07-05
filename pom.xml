@@ -31,6 +31,7 @@
         <springdoc.version>1.7.0</springdoc.version>
         <!-- 1.21+ required for Docker Engine 29 (minimum API version 1.44) -->
         <testcontainers.version>1.21.3</testcontainers.version>
+        <docker-java.version>3.5.3</docker-java.version>
         <!-- 2.5.33 fixes CVE-2023-50164 (file-upload path traversal) -->
         <struts.version>2.5.33</struts.version>
     </properties>
@@ -43,6 +44,28 @@
                 <version>${testcontainers.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- docker-java < 3.5 omits the HTTP Host header on named-pipe requests,
+                 which Docker Engine 28+ (Go 1.24 http server) rejects with 400. -->
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-api</artifactId>
+                <version>${docker-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-core</artifactId>
+                <version>${docker-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-transport</artifactId>
+                <version>${docker-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.docker-java</groupId>
+                <artifactId>docker-java-transport-zerodep</artifactId>
+                <version>${docker-java.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.mapstruct</groupId>
