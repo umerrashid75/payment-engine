@@ -4,14 +4,14 @@ services:
     environment:
       MYSQL_DATABASE: coreissuer
       MYSQL_USER: coreissuer
-      MYSQL_PASSWORD: coreissuer
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_PASSWORD: ${DB_PASSWORD:-coreissuer}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "coreissuer", "-pcoreissuer"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "coreissuer", "-p${DB_PASSWORD:-coreissuer}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,8 +25,12 @@ services:
     environment:
       DB_URL: jdbc:mysql://mysql:3306/coreissuer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
       DB_USER: coreissuer
-      DB_PASSWORD: coreissuer
-      COREISSUER_PEPPER: ${COREISSUER_PEPPER}
+      DB_PASSWORD: ${DB_PASSWORD:-coreissuer}
+      # Required — compose fails fast if these are missing from .env
+      COREISSUER_PEPPER: ${COREISSUER_PEPPER:?set COREISSUER_PEPPER in .env}
+      ADMIN_USER: ${ADMIN_USER:?set ADMIN_USER in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      WEBHOOK_TARGET_URL: ${WEBHOOK_TARGET_URL:-}
     depends_on:
       mysql:
         condition: service_healthy
@@ -40,7 +44,7 @@ services:
     environment:
       DB_URL: jdbc:mysql://mysql:3306/coreissuer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
       DB_USER: coreissuer
-      DB_PASSWORD: coreissuer
+      DB_PASSWORD: ${DB_PASSWORD:-coreissuer}
     depends_on:
       mysql:
         condition: service_healthy

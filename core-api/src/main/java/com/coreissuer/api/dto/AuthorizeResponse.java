@@ -11,6 +11,7 @@ public class AuthorizeResponse {
     private String transactionId;
     private String status;
     private BigDecimal amount;
+    private BigDecimal feeAmount;
     private String currency;
     private BigDecimal availableBalanceAfter;
     private String declineReason;

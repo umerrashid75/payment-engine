@@ -14,6 +14,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,7 +63,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("no discrepancies when every transaction has balanced debit and credit")
         void balanced_noDiscrepancies() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-1", "acc-cardholder", "D", "42.00"),
                     entry("txn-1", "acc-network-settle", "C", "42.00"),
                     entry("txn-2", "acc-cardholder", "D", "10.00"),
@@ -77,7 +79,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("flags transaction where debits and credits differ")
         void imbalanced_reportsDiscrepancy() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-bad", "acc-cardholder", "D", "42.00"),
                     entry("txn-bad", "acc-network-settle", "C", "40.00")
             ));
@@ -92,7 +94,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("counts each imbalanced transaction separately")
         void multipleDiscrepancies_allCounted() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-a", "acc-ch", "D", "50.00"),
                     entry("txn-a", "acc-net", "C", "40.00"),  // $10 gap
                     entry("txn-b", "acc-ch", "D", "30.00"),
@@ -112,7 +114,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("empty ledger produces a valid report with zero discrepancies")
         void emptyLedger_zeroDiscrepancies() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of());
+            when(ledgerEntryRepository.findAll()).thenReturn(Collections.emptyList());
 
             String report = service.reconcile();
 
@@ -122,7 +124,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("report always contains the standard header line")
         void report_containsHeader() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of());
+            when(ledgerEntryRepository.findAll()).thenReturn(Collections.emptyList());
 
             String report = service.reconcile();
 
@@ -142,7 +144,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("merchant volume appears in report bucketed by account id")
         void singleMerchant_appearsInReport() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-1", "acc-merchant-1", "C", "55.00"),
                     entry("txn-1", "acc-cardholder", "D", "55.00")
             ));
@@ -156,7 +158,7 @@ class ReconciliationServiceTest {
         @Test
         @DisplayName("multiple merchants each appear in their own section")
         void multipleMerchants_allBucketed() {
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-1", "acc-merchant-1", "C", "100.00"),
                     entry("txn-1", "acc-cardholder-a", "D", "100.00"),
                     entry("txn-2", "acc-merchant-2", "C", "200.00"),
@@ -173,7 +175,7 @@ class ReconciliationServiceTest {
         @DisplayName("net merchant volume is credits minus debits (refund reduces net)")
         void merchantNetVolume_creditsMinusDebits() {
             // Capture credit of $100, then refund debit of $30: net = $70
-            when(ledgerEntryRepository.findAll()).thenReturn(List.of(
+            when(ledgerEntryRepository.findAll()).thenReturn(Arrays.asList(
                     entry("txn-capture", "acc-merchant-1", "C", "100.00"),
                     entry("txn-capture", "acc-net", "D", "100.00"),
                     entry("txn-refund",  "acc-merchant-1", "D", "30.00"),

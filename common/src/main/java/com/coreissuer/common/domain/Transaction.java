@@ -35,6 +35,9 @@ public class Transaction {
     @Column(precision = 19, scale = 4, nullable = false)
     private BigDecimal amount;
 
+    @Column(name = "fee_amount", precision = 19, scale = 4, nullable = false)
+    private BigDecimal feeAmount = BigDecimal.ZERO;
+
     @Column(length = 3, nullable = false)
     private String currency;
 

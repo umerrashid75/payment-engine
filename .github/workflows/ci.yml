@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Make wrapper executable
+        run: chmod +x mvnw
+
+      # Main code is compiled with --release 8 (see parent pom); the build JDK
+      # only needs to be modern. verify runs unit tests (surefire) and the
+      # Testcontainers integration tests (failsafe, needs Docker — available
+      # on ubuntu-latest runners).
+      - name: Build and test
+        run: ./mvnw -B clean verify
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: core-api/target/site/jacoco/
+          if-no-files-found: ignore

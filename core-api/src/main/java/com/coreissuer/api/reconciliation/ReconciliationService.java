@@ -5,6 +5,7 @@ import com.coreissuer.common.repository.LedgerEntryRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,9 @@ public class ReconciliationService {
     private static final Logger log = LoggerFactory.getLogger(ReconciliationService.class);
 
     private final LedgerEntryRepository ledgerEntryRepository;
+
+    @Value("${coreissuer.reconciliation.report-dir:reports}")
+    private String reportDir = "reports";
 
     @Scheduled(cron = "0 0 2 * * ?") // Run at 2 AM every day
     @Transactional(readOnly = true)
@@ -97,7 +101,7 @@ public class ReconciliationService {
     }
 
     private void writeReportToFile(String report) {
-        File dir = new File("reports");
+        File dir = new File(reportDir);
         if (!dir.exists()) {
             dir.mkdirs();
         }

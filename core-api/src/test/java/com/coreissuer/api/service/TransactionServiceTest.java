@@ -24,6 +24,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,8 +55,8 @@ class TransactionServiceTest {
     void setUp() {
         service = new TransactionService(
                 cardRepository, accountRepository, transactionRepository,
-                ledgerEntryRepository, List.of(passThroughStrategy),
-                List.of(passFraudCheck), eventPublisher, new ObjectMapper()
+                ledgerEntryRepository, Collections.singletonList(passThroughStrategy),
+                Collections.singletonList(passFraudCheck), eventPublisher, new ObjectMapper()
         );
     }
 
@@ -158,8 +160,10 @@ class TransactionServiceTest {
             verify(ledgerEntryRepository, times(2)).save(captor.capture());
             List<LedgerEntry> entries = captor.getAllValues();
 
-            LedgerEntry debit  = entries.stream().filter(e -> "D".equals(e.getDirection())).findFirst().orElseThrow();
-            LedgerEntry credit = entries.stream().filter(e -> "C".equals(e.getDirection())).findFirst().orElseThrow();
+            LedgerEntry debit  = entries.stream().filter(e -> "D".equals(e.getDirection())).findFirst()
+                    .orElseThrow(() -> new AssertionError("no debit entry"));
+            LedgerEntry credit = entries.stream().filter(e -> "C".equals(e.getDirection())).findFirst()
+                    .orElseThrow(() -> new AssertionError("no credit entry"));
 
             assertThat(debit.getAccount().getId()).isEqualTo("acc-ch-1");
             assertThat(credit.getAccount().getId()).isEqualTo("acc-network-settle");
@@ -205,8 +209,8 @@ class TransactionServiceTest {
 
             TransactionService svc = new TransactionService(
                     cardRepository, accountRepository, transactionRepository,
-                    ledgerEntryRepository, List.of(passThroughStrategy),
-                    List.of(req -> FraudResult.block("VELOCITY_LIMIT_EXCEEDED")),
+                    ledgerEntryRepository, Collections.singletonList(passThroughStrategy),
+                    Collections.singletonList(req -> FraudResult.block("VELOCITY_LIMIT_EXCEEDED")),
                     eventPublisher, new ObjectMapper()
             );
 
@@ -214,6 +218,26 @@ class TransactionServiceTest {
 
             assertThat(resp.getStatus()).isEqualTo(TransactionStatus.DECLINED.name());
             assertThat(resp.getDeclineReason()).isEqualTo("VELOCITY_LIMIT_EXCEEDED");
+        }
+
+        @Test
+        @DisplayName("declines with CURRENCY_MISMATCH when request currency differs from account currency")
+        void currencyMismatch_declines() {
+            Card card = activeCard("card-1", "acc-ch-1"); // account currency is USD
+            stubTransactionSave("txn-d");
+            when(cardRepository.findById("card-1")).thenReturn(Optional.of(card));
+            when(accountRepository.findByIdForUpdate("acc-ch-1")).thenReturn(Optional.of(card.getAccount()));
+
+            AuthorizeRequest req = AuthorizeRequest.builder()
+                    .cardId("card-1").merchantId("1").mcc("5411")
+                    .amount(new BigDecimal("10.00")).currency("EUR")
+                    .build();
+
+            AuthorizeResponse resp = service.authorize(req);
+
+            assertThat(resp.getStatus()).isEqualTo(TransactionStatus.DECLINED.name());
+            assertThat(resp.getDeclineReason()).isEqualTo("CURRENCY_MISMATCH");
+            verify(ledgerEntryRepository, never()).save(any());
         }
 
         @Test
@@ -247,6 +271,7 @@ class TransactionServiceTest {
             when(transactionRepository.findById("txn-1")).thenReturn(Optional.of(txn));
             when(accountRepository.findByIdForUpdate("acc-network-settle")).thenReturn(Optional.of(network));
             when(accountRepository.findByIdForUpdate("acc-merchant-1")).thenReturn(Optional.of(merchant));
+            when(accountRepository.findByIdForUpdate("acc-ch-1")).thenReturn(Optional.of(card.getAccount()));
             when(transactionRepository.save(any())).thenReturn(txn);
 
             service.capture("txn-1");
@@ -254,7 +279,40 @@ class TransactionServiceTest {
             assertThat(merchant.getAvailableBalance()).isEqualByComparingTo("142.00");
             assertThat(merchant.getLedgerBalance()).isEqualByComparingTo("142.00");
             assertThat(network.getLedgerBalance()).isEqualByComparingTo("0.00");
+            // hold reduced available at authorize; posting reduces the ledger balance
+            assertThat(card.getAccount().getLedgerBalance()).isEqualByComparingTo("458.00");
             verify(ledgerEntryRepository, times(2)).save(any(LedgerEntry.class));
+        }
+
+        @Test
+        @DisplayName("posts the fee to the fee revenue account and writes a second ledger pair")
+        void authorizedWithFee_postsFeeToFeeRevenue() {
+            Card card = activeCard("card-1", "acc-ch-1");
+            Transaction txn = savedTxn("txn-1", TransactionStatus.AUTHORIZED.name(), new BigDecimal("40.00"), card);
+            txn.setFeeAmount(new BigDecimal("1.00"));
+            Account network = networkAccount();
+            network.setLedgerBalance(new BigDecimal("41.00"));
+            Account merchant = merchantAccount();
+            Account feeRevenue = new Account();
+            feeRevenue.setId("acc-fee-revenue");
+            feeRevenue.setAvailableBalance(BigDecimal.ZERO);
+            feeRevenue.setLedgerBalance(BigDecimal.ZERO);
+
+            when(transactionRepository.findById("txn-1")).thenReturn(Optional.of(txn));
+            when(accountRepository.findByIdForUpdate("acc-network-settle")).thenReturn(Optional.of(network));
+            when(accountRepository.findByIdForUpdate("acc-merchant-1")).thenReturn(Optional.of(merchant));
+            when(accountRepository.findByIdForUpdate("acc-ch-1")).thenReturn(Optional.of(card.getAccount()));
+            when(accountRepository.findByIdForUpdate("acc-fee-revenue")).thenReturn(Optional.of(feeRevenue));
+            when(transactionRepository.save(any())).thenReturn(txn);
+
+            service.capture("txn-1");
+
+            assertThat(feeRevenue.getAvailableBalance()).isEqualByComparingTo("1.00");
+            assertThat(feeRevenue.getLedgerBalance()).isEqualByComparingTo("1.00");
+            assertThat(merchant.getAvailableBalance()).isEqualByComparingTo("140.00");
+            assertThat(network.getLedgerBalance()).isEqualByComparingTo("0.00");
+            assertThat(card.getAccount().getLedgerBalance()).isEqualByComparingTo("459.00");
+            verify(ledgerEntryRepository, times(4)).save(any(LedgerEntry.class));
         }
 
         @Test
@@ -269,6 +327,7 @@ class TransactionServiceTest {
             when(transactionRepository.findById("txn-1")).thenReturn(Optional.of(txn));
             when(accountRepository.findByIdForUpdate("acc-network-settle")).thenReturn(Optional.of(network));
             when(accountRepository.findByIdForUpdate("acc-merchant-1")).thenReturn(Optional.of(merchant));
+            when(accountRepository.findByIdForUpdate("acc-ch-1")).thenReturn(Optional.of(card.getAccount()));
             when(transactionRepository.save(any())).thenReturn(txn);
 
             service.capture("txn-1");
@@ -277,8 +336,10 @@ class TransactionServiceTest {
             verify(ledgerEntryRepository, times(2)).save(captor.capture());
             List<LedgerEntry> entries = captor.getAllValues();
 
-            LedgerEntry debit  = entries.stream().filter(e -> "D".equals(e.getDirection())).findFirst().orElseThrow();
-            LedgerEntry credit = entries.stream().filter(e -> "C".equals(e.getDirection())).findFirst().orElseThrow();
+            LedgerEntry debit  = entries.stream().filter(e -> "D".equals(e.getDirection())).findFirst()
+                    .orElseThrow(() -> new AssertionError("no debit entry"));
+            LedgerEntry credit = entries.stream().filter(e -> "C".equals(e.getDirection())).findFirst()
+                    .orElseThrow(() -> new AssertionError("no credit entry"));
 
             assertThat(debit.getAccount().getId()).isEqualTo("acc-network-settle");
             assertThat(credit.getAccount().getId()).isEqualTo("acc-merchant-1");
@@ -333,6 +394,27 @@ class TransactionServiceTest {
             assertThat(card.getAccount().getAvailableBalance()).isEqualByComparingTo("500.00");
             assertThat(network.getLedgerBalance()).isEqualByComparingTo("0.00");
             verify(ledgerEntryRepository, times(2)).save(any(LedgerEntry.class));
+        }
+
+        @Test
+        @DisplayName("releases the fee together with the amount")
+        void authorizedWithFee_releasesFullHold() {
+            Card card = activeCard("card-1", "acc-ch-1");
+            card.getAccount().setAvailableBalance(new BigDecimal("459.00")); // 500 - (40 + 1 fee)
+            Transaction txn = savedTxn("txn-1", TransactionStatus.AUTHORIZED.name(), new BigDecimal("40.00"), card);
+            txn.setFeeAmount(new BigDecimal("1.00"));
+            Account network = networkAccount();
+            network.setLedgerBalance(new BigDecimal("41.00"));
+
+            when(transactionRepository.findById("txn-1")).thenReturn(Optional.of(txn));
+            when(accountRepository.findByIdForUpdate("acc-network-settle")).thenReturn(Optional.of(network));
+            when(accountRepository.findByIdForUpdate("acc-ch-1")).thenReturn(Optional.of(card.getAccount()));
+            when(transactionRepository.save(any())).thenReturn(txn);
+
+            service.reverse("txn-1");
+
+            assertThat(card.getAccount().getAvailableBalance()).isEqualByComparingTo("500.00");
+            assertThat(network.getLedgerBalance()).isEqualByComparingTo("0.00");
         }
 
         @Test

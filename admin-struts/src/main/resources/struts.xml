@@ -6,6 +6,8 @@
 <struts>
     <constant name="struts.devMode" value="false" />
     <constant name="struts.objectFactory" value="spring" />
+    <!-- Keep Spring Boot endpoints (actuator) out of the Struts dispatcher. -->
+    <constant name="struts.action.excludePattern" value="/actuator/.*" />
 
     <package name="default" extends="struts-default" namespace="/">
         <action name="cards" class="com.coreissuer.admin.action.CardAction" method="list">
@@ -13,7 +15,13 @@
         </action>
 
         <action name="updateCardStatus" class="com.coreissuer.admin.action.CardAction" method="updateStatus">
+            <!-- Session token blocks CSRF and duplicate form submissions. -->
+            <interceptor-ref name="token"/>
+            <interceptor-ref name="defaultStack"/>
             <result name="success" type="redirectAction">
+                <param name="actionName">cards</param>
+            </result>
+            <result name="invalid.token" type="redirectAction">
                 <param name="actionName">cards</param>
             </result>
         </action>

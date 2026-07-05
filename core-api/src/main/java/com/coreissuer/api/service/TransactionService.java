@@ -3,6 +3,7 @@ package com.coreissuer.api.service;
 import com.coreissuer.api.dto.AuthorizeRequest;
 import com.coreissuer.api.dto.AuthorizeResponse;
 import com.coreissuer.api.event.TransactionEvent;
+import com.coreissuer.api.event.TransactionEventPayload;
 import com.coreissuer.api.exception.AccountNotFoundException;
 import com.coreissuer.api.exception.AuthorizationStrategyNotFoundException;
 import com.coreissuer.api.exception.CardNotFoundException;
@@ -42,6 +43,8 @@ public class TransactionService {
     private final ObjectMapper objectMapper;
 
     private static final String NETWORK_SETTLEMENT_ACCOUNT_ID = "acc-network-settle";
+    private static final String FEE_REVENUE_ACCOUNT_ID = "acc-fee-revenue";
+    private static final String DEFAULT_MERCHANT_COUNTRY = "US";
 
     @Transactional
     public AuthorizeResponse authorize(AuthorizeRequest request) {
@@ -62,10 +65,20 @@ public class TransactionService {
         Account account = accountRepository.findByIdForUpdate(card.getAccount().getId())
                 .orElseThrow(() -> new AccountNotFoundException(card.getAccount().getId()));
 
+        // No FX engine: charging a foreign-currency amount 1:1 against the
+        // account balance would be silently wrong, so decline instead.
+        if (!account.getCurrency().equalsIgnoreCase(request.getCurrency())) {
+            return buildDeclineResponse(request, card, "CURRENCY_MISMATCH");
+        }
+
+        String merchantCountry = request.getMerchantCountry() != null
+                ? request.getMerchantCountry()
+                : DEFAULT_MERCHANT_COUNTRY;
+
         AuthorizationStrategy strategy = strategies.stream()
-                .filter(s -> s.supports(request.getCurrency(), "US"))
+                .filter(s -> s.supports(request.getCurrency(), merchantCountry))
                 .findFirst()
-                .orElseThrow(() -> new AuthorizationStrategyNotFoundException(request.getCurrency(), "US"));
+                .orElseThrow(() -> new AuthorizationStrategyNotFoundException(request.getCurrency(), merchantCountry));
 
         BigDecimal fee = strategy.computeFee(request.getAmount());
         BigDecimal totalAmount = request.getAmount().add(fee);
@@ -87,6 +100,7 @@ public class TransactionService {
         transaction.setMerchantId(request.getMerchantId());
         transaction.setMcc(request.getMcc());
         transaction.setAmount(request.getAmount());
+        transaction.setFeeAmount(fee);
         transaction.setCurrency(request.getCurrency());
         transaction.setStatus(TransactionStatus.AUTHORIZED.name());
         transaction = transactionRepository.save(transaction);
@@ -96,24 +110,14 @@ public class TransactionService {
         networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().add(totalAmount));
         accountRepository.save(networkAccount);
 
-        LedgerEntry debit = new LedgerEntry();
-        debit.setTransaction(transaction);
-        debit.setAccount(account);
-        debit.setDirection("D");
-        debit.setAmount(totalAmount);
-        ledgerEntryRepository.save(debit);
-
-        LedgerEntry credit = new LedgerEntry();
-        credit.setTransaction(transaction);
-        credit.setAccount(networkAccount);
-        credit.setDirection("C");
-        credit.setAmount(totalAmount);
-        ledgerEntryRepository.save(credit);
+        createLedgerPair(transaction, account, networkAccount, totalAmount);
+        publishEvent(transaction);
 
         return AuthorizeResponse.builder()
                 .transactionId(transaction.getId())
                 .status(TransactionStatus.AUTHORIZED.name())
                 .amount(request.getAmount())
+                .feeAmount(fee)
                 .currency(request.getCurrency())
                 .availableBalanceAfter(account.getAvailableBalance())
                 .build();
@@ -147,23 +151,45 @@ public class TransactionService {
                 TransactionStatus.CAPTURED
         );
 
+        BigDecimal amount = transaction.getAmount();
+        BigDecimal fee = feeOf(transaction);
+        BigDecimal totalAmount = amount.add(fee);
+
         Account networkAccount = accountRepository.findByIdForUpdate(NETWORK_SETTLEMENT_ACCOUNT_ID)
                 .orElseThrow(() -> new AccountNotFoundException(NETWORK_SETTLEMENT_ACCOUNT_ID));
         String merchantAccountId = resolveMerchantAccountId(transaction.getMerchantId());
         Account merchantAccount = accountRepository.findByIdForUpdate(merchantAccountId)
                 .orElseThrow(() -> new AccountNotFoundException(merchantAccountId));
+        String cardholderAccountId = transaction.getCard().getAccount().getId();
+        Account cardholderAccount = accountRepository.findByIdForUpdate(cardholderAccountId)
+                .orElseThrow(() -> new AccountNotFoundException(cardholderAccountId));
 
-        networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(transaction.getAmount()));
-        merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().add(transaction.getAmount()));
-        merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().add(transaction.getAmount()));
+        networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(totalAmount));
+        merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().add(amount));
+        merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().add(amount));
+        // The hold reduced available at authorize; posting reduces the ledger balance.
+        cardholderAccount.setLedgerBalance(cardholderAccount.getLedgerBalance().subtract(totalAmount));
 
         accountRepository.save(networkAccount);
         accountRepository.save(merchantAccount);
+        accountRepository.save(cardholderAccount);
 
         transaction.setStatus(TransactionStatus.CAPTURED.name());
         transactionRepository.save(transaction);
 
-        createLedgerPair(transaction, networkAccount, "D", merchantAccount, "C", transaction.getAmount());
+        createLedgerPair(transaction, networkAccount, merchantAccount, amount);
+
+        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+            Account feeRevenueAccount = accountRepository.findByIdForUpdate(FEE_REVENUE_ACCOUNT_ID)
+                    .orElseThrow(() -> new AccountNotFoundException(FEE_REVENUE_ACCOUNT_ID));
+            feeRevenueAccount.setAvailableBalance(feeRevenueAccount.getAvailableBalance().add(fee));
+            feeRevenueAccount.setLedgerBalance(feeRevenueAccount.getLedgerBalance().add(fee));
+            accountRepository.save(feeRevenueAccount);
+
+            createLedgerPair(transaction, networkAccount, feeRevenueAccount, fee);
+        }
+
+        publishEvent(transaction);
     }
 
     @Transactional
@@ -176,14 +202,17 @@ public class TransactionService {
                 TransactionStatus.REVERSED
         );
 
+        // Release the full hold, including the fee taken at authorize.
+        BigDecimal totalAmount = transaction.getAmount().add(feeOf(transaction));
+
         Account networkAccount = accountRepository.findByIdForUpdate(NETWORK_SETTLEMENT_ACCOUNT_ID)
                 .orElseThrow(() -> new AccountNotFoundException(NETWORK_SETTLEMENT_ACCOUNT_ID));
         String cardholderAccountId = transaction.getCard().getAccount().getId();
         Account cardholderAccount = accountRepository.findByIdForUpdate(cardholderAccountId)
                 .orElseThrow(() -> new AccountNotFoundException(cardholderAccountId));
 
-        networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(transaction.getAmount()));
-        cardholderAccount.setAvailableBalance(cardholderAccount.getAvailableBalance().add(transaction.getAmount()));
+        networkAccount.setLedgerBalance(networkAccount.getLedgerBalance().subtract(totalAmount));
+        cardholderAccount.setAvailableBalance(cardholderAccount.getAvailableBalance().add(totalAmount));
 
         accountRepository.save(networkAccount);
         accountRepository.save(cardholderAccount);
@@ -191,7 +220,8 @@ public class TransactionService {
         transaction.setStatus(TransactionStatus.REVERSED.name());
         transactionRepository.save(transaction);
 
-        createLedgerPair(transaction, networkAccount, "D", cardholderAccount, "C", transaction.getAmount());
+        createLedgerPair(transaction, networkAccount, cardholderAccount, totalAmount);
+        publishEvent(transaction);
     }
 
     @Transactional
@@ -204,6 +234,9 @@ public class TransactionService {
                 TransactionStatus.REFUNDED
         );
 
+        // Refund returns the sale amount; the fee stays with fee revenue.
+        BigDecimal amount = transaction.getAmount();
+
         String merchantAccountId = resolveMerchantAccountId(transaction.getMerchantId());
         Account merchantAccount = accountRepository.findByIdForUpdate(merchantAccountId)
                 .orElseThrow(() -> new AccountNotFoundException(merchantAccountId));
@@ -211,10 +244,10 @@ public class TransactionService {
         Account cardholderAccount = accountRepository.findByIdForUpdate(cardholderAccountId)
                 .orElseThrow(() -> new AccountNotFoundException(cardholderAccountId));
 
-        merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().subtract(transaction.getAmount()));
-        merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().subtract(transaction.getAmount()));
-        cardholderAccount.setAvailableBalance(cardholderAccount.getAvailableBalance().add(transaction.getAmount()));
-        cardholderAccount.setLedgerBalance(cardholderAccount.getLedgerBalance().add(transaction.getAmount()));
+        merchantAccount.setAvailableBalance(merchantAccount.getAvailableBalance().subtract(amount));
+        merchantAccount.setLedgerBalance(merchantAccount.getLedgerBalance().subtract(amount));
+        cardholderAccount.setAvailableBalance(cardholderAccount.getAvailableBalance().add(amount));
+        cardholderAccount.setLedgerBalance(cardholderAccount.getLedgerBalance().add(amount));
 
         accountRepository.save(merchantAccount);
         accountRepository.save(cardholderAccount);
@@ -222,34 +255,37 @@ public class TransactionService {
         transaction.setStatus(TransactionStatus.REFUNDED.name());
         transactionRepository.save(transaction);
 
-        createLedgerPair(transaction, merchantAccount, "D", cardholderAccount, "C", transaction.getAmount());
+        createLedgerPair(transaction, merchantAccount, cardholderAccount, amount);
+        publishEvent(transaction);
     }
 
-    private void createLedgerPair(Transaction tx, Account debitAcc, String debitDir, Account creditAcc, String creditDir, BigDecimal amount) {
+    private void createLedgerPair(Transaction tx, Account debitAcc, Account creditAcc, BigDecimal amount) {
         LedgerEntry debit = new LedgerEntry();
         debit.setTransaction(tx);
         debit.setAccount(debitAcc);
-        debit.setDirection(debitDir);
+        debit.setDirection("D");
         debit.setAmount(amount);
         ledgerEntryRepository.save(debit);
 
         LedgerEntry credit = new LedgerEntry();
         credit.setTransaction(tx);
         credit.setAccount(creditAcc);
-        credit.setDirection(creditDir);
+        credit.setDirection("C");
         credit.setAmount(amount);
         ledgerEntryRepository.save(credit);
-
-        publishEvent(tx);
     }
 
     private void publishEvent(Transaction tx) {
         try {
-            String payload = objectMapper.writeValueAsString(tx);
+            String payload = objectMapper.writeValueAsString(TransactionEventPayload.from(tx));
             eventPublisher.publishEvent(new TransactionEvent(this, tx.getId(), tx.getStatus(), payload));
         } catch (Exception e) {
             log.error("Failed to serialize transaction event txId={}", tx.getId(), e);
         }
+    }
+
+    private static BigDecimal feeOf(Transaction tx) {
+        return tx.getFeeAmount() != null ? tx.getFeeAmount() : BigDecimal.ZERO;
     }
 
     // TODO: replace with a real merchant->account mapping table.

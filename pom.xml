@@ -29,8 +29,10 @@
         <mapstruct.version>1.5.5.Final</mapstruct.version>
         <lombok.version>1.18.30</lombok.version>
         <springdoc.version>1.7.0</springdoc.version>
-        <testcontainers.version>1.19.0</testcontainers.version>
-        <struts.version>2.5.30</struts.version>
+        <!-- 1.21+ required for Docker Engine 29 (minimum API version 1.44) -->
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <!-- 2.5.33 fixes CVE-2023-50164 (file-upload path traversal) -->
+        <struts.version>2.5.33</struts.version>
     </properties>
 
     <dependencyManagement>
@@ -58,8 +60,9 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.11.0</version>
                     <configuration>
-                        <source>${java.version}</source>
-                        <target>${java.version}</target>
+                        <!-- The Docker images run a Java 8 JRE: release=8 makes any use of
+                             Java 9+ APIs a compile error instead of a production crash. -->
+                        <release>8</release>
                         <annotationProcessorPaths>
                             <path>
                                 <groupId>org.mapstruct</groupId>

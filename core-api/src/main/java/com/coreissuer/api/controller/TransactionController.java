@@ -5,18 +5,15 @@ import com.coreissuer.api.dto.AuthorizeResponse;
 import com.coreissuer.api.idempotency.IdempotencyService;
 import com.coreissuer.api.service.TransactionService;
 import com.coreissuer.common.util.CryptoUtils;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
-import java.util.Map;
+import javax.validation.constraints.Size;
+import java.io.IOException;
 import java.util.Optional;
 
 @RestController
@@ -25,47 +22,33 @@ import java.util.Optional;
 @Validated
 public class TransactionController {
 
-    private static final Logger log = LoggerFactory.getLogger(TransactionController.class);
+    private static final String AUTHORIZE_ENDPOINT = "/api/v1/transactions/authorize";
 
     private final TransactionService transactionService;
     private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/authorize")
-    public ResponseEntity<?> authorize(
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+    public ResponseEntity<AuthorizeResponse> authorize(
+            @RequestHeader("Idempotency-Key") @Size(min = 1, max = 80) String idempotencyKey,
             @Valid @RequestBody AuthorizeRequest request) {
 
-        String requestHash;
-        try {
-            requestHash = CryptoUtils.simpleHash(objectMapper.writeValueAsString(request));
-        } catch (JsonProcessingException e) {
-            log.error("Failed to hash authorize request for idempotency key={}", idempotencyKey, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "internal_server_error"));
+        String requestHash = CryptoUtils.simpleHash(toJson(request));
+
+        Optional<String> cachedResponse = idempotencyService.getCachedResponse(idempotencyKey, requestHash);
+        if (cachedResponse.isPresent()) {
+            return ResponseEntity.ok(fromJson(cachedResponse.get()));
         }
 
         try {
-            Optional<String> cachedResponse = idempotencyService.getCachedResponse(idempotencyKey, requestHash);
-            if (cachedResponse.isPresent()) {
-                AuthorizeResponse response = objectMapper.readValue(cachedResponse.get(), AuthorizeResponse.class);
-                return ResponseEntity.ok(response);
-            }
-
             AuthorizeResponse response = transactionService.authorize(request);
-
-            String responseBody = objectMapper.writeValueAsString(response);
-            idempotencyService.saveResponse(idempotencyKey, "/api/v1/transactions/authorize", requestHash, 200, responseBody);
-
+            idempotencyService.saveResponse(idempotencyKey, AUTHORIZE_ENDPOINT, requestHash, 200, toJson(response));
             return ResponseEntity.ok(response);
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("error", "idempotency_conflict", "detail", e.getMessage()));
-        } catch (Exception e) {
-            log.error("Authorize failed for idempotency key={}", idempotencyKey, e);
+        } catch (RuntimeException e) {
+            // Release the in-flight marker so the client can safely retry,
+            // then let GlobalExceptionHandler map the failure to a status code.
             idempotencyService.clearProcessing(idempotencyKey);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "internal_server_error"));
+            throw e;
         }
     }
 
@@ -85,5 +68,21 @@ public class TransactionController {
     public ResponseEntity<Void> refund(@PathVariable String id) {
         transactionService.refund(id);
         return ResponseEntity.ok().build();
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to serialize payload", e);
+        }
+    }
+
+    private AuthorizeResponse fromJson(String json) {
+        try {
+            return objectMapper.readValue(json, AuthorizeResponse.class);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to deserialize cached response", e);
+        }
     }
 }

@@ -4,16 +4,28 @@ import com.coreissuer.common.domain.Card;
 import com.coreissuer.common.domain.CardStatus;
 import com.coreissuer.common.service.SharedCardService;
 import com.opensymphony.xwork2.ActionSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+/**
+ * Struts actions hold per-request state (form fields), so they must be
+ * prototype-scoped — a singleton would share request data across threads.
+ */
 @Component
+@Scope("prototype")
 public class CardAction extends ActionSupport {
 
+    private static final long serialVersionUID = 1L;
+
+    private static final Logger log = LoggerFactory.getLogger(CardAction.class);
+
     @Autowired
-    private SharedCardService sharedCardService;
+    private transient SharedCardService sharedCardService;
 
     private List<Card> cards;
     private String cardId;
@@ -26,7 +38,12 @@ public class CardAction extends ActionSupport {
 
     public String updateStatus() {
         if (cardId != null && status != null) {
-            sharedCardService.updateStatus(cardId, CardStatus.valueOf(status));
+            try {
+                sharedCardService.updateStatus(cardId, CardStatus.valueOf(status));
+            } catch (IllegalArgumentException e) {
+                log.warn("Rejected card status update: cardId={} status={} reason={}", cardId, status, e.getMessage());
+                addActionError("Could not update card status.");
+            }
         }
         return SUCCESS;
     }

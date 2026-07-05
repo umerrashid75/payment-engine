@@ -34,7 +34,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
-@TestPropertySource(properties = "coreissuer.security.pepper=test-pepper-value-for-it")
+@TestPropertySource(properties = {
+        "coreissuer.security.pepper=test-pepper-value-for-it",
+        "coreissuer.security.admin-user=it-admin",
+        "coreissuer.security.admin-password=it-password"
+})
 class TransactionFlowIT {
 
     @Container
@@ -86,7 +90,8 @@ class TransactionFlowIT {
 
         transactionService.capture(auth.getTransactionId());
 
-        Account cardholder = accountRepository.findById(card.getAccountId()).orElseThrow();
+        Account cardholder = accountRepository.findById(card.getAccountId())
+                .orElseThrow(() -> new AssertionError("cardholder account missing"));
         assertThat(cardholder.getAvailableBalance()).isEqualByComparingTo("70.00");
     }
 
@@ -98,7 +103,8 @@ class TransactionFlowIT {
         AuthorizeResponse auth = transactionService.authorize(authorizeRequest(card.getId(), "30.00"));
         transactionService.reverse(auth.getTransactionId());
 
-        Account cardholder = accountRepository.findById(card.getAccountId()).orElseThrow();
+        Account cardholder = accountRepository.findById(card.getAccountId())
+                .orElseThrow(() -> new AssertionError("cardholder account missing"));
         assertThat(cardholder.getAvailableBalance()).isEqualByComparingTo("100.00");
     }
 
@@ -111,7 +117,8 @@ class TransactionFlowIT {
         transactionService.capture(auth.getTransactionId());
         transactionService.refund(auth.getTransactionId());
 
-        Account cardholder = accountRepository.findById(card.getAccountId()).orElseThrow();
+        Account cardholder = accountRepository.findById(card.getAccountId())
+                .orElseThrow(() -> new AssertionError("cardholder account missing"));
         assertThat(cardholder.getAvailableBalance()).isEqualByComparingTo("100.00");
     }
 
@@ -163,7 +170,8 @@ class TransactionFlowIT {
         assertThat(authorized.get()).isEqualTo(2);
         assertThat(declined.get()).isEqualTo(1);
 
-        Account account = accountRepository.findById(card.getAccountId()).orElseThrow();
+        Account account = accountRepository.findById(card.getAccountId())
+                .orElseThrow(() -> new AssertionError("cardholder account missing"));
         assertThat(account.getAvailableBalance()).isEqualByComparingTo("1.00");
     }
 }

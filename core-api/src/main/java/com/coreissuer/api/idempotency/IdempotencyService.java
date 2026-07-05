@@ -16,29 +16,36 @@ public class IdempotencyService {
     private final IdempotencyRecordRepository repository;
     private final IdempotencyCache cache;
 
+    /**
+     * Returns the stored response for a replayed request, empty if the caller
+     * should process the request, or throws IllegalStateException (mapped to
+     * 409) when the key is reused with a different payload or still in flight.
+     */
     public Optional<String> getCachedResponse(String idempotencyKey, String requestHash) {
-        // 1. Check in-memory cache first
-        String cachedResponse = cache.get(idempotencyKey);
-        if (cachedResponse != null && !cachedResponse.equals("PROCESSING")) {
-            return Optional.of(cachedResponse);
+        CachedIdempotentResponse cached = cache.get(idempotencyKey);
+        if (cached != null) {
+            if (!cached.getRequestHash().equals(requestHash)) {
+                throw new IllegalStateException("Idempotency key reused with a different request payload");
+            }
+            if (cached.isProcessing()) {
+                throw new IllegalStateException("A request with this idempotency key is already being processed");
+            }
+            return Optional.of(cached.getResponseBody());
         }
 
-        // 2. Check DB
         Optional<IdempotencyRecord> recordOpt = repository.findById(idempotencyKey);
         if (recordOpt.isPresent()) {
             IdempotencyRecord record = recordOpt.get();
             if (!record.getRequestHash().equals(requestHash)) {
-                throw new IllegalStateException("Idempotency key collision with different request payload (409 Conflict)");
+                throw new IllegalStateException("Idempotency key reused with a different request payload");
             }
-            cache.put(idempotencyKey, record.getResponseBody());
+            cache.putResponse(idempotencyKey, record.getRequestHash(), record.getResponseBody());
             return Optional.of(record.getResponseBody());
         }
 
-        // 3. Mark as processing in cache
-        if (!cache.putIfAbsent(idempotencyKey, "PROCESSING")) {
-             throw new IllegalStateException("Request is already processing (429 Too Many Requests or 409 Conflict)");
+        if (!cache.markProcessing(idempotencyKey, requestHash)) {
+            throw new IllegalStateException("A request with this idempotency key is already being processed");
         }
-        
         return Optional.empty();
     }
 
@@ -52,12 +59,10 @@ public class IdempotencyService {
         record.setResponseBody(responseBody);
         repository.save(record);
 
-        cache.put(idempotencyKey, responseBody);
+        cache.putResponse(idempotencyKey, requestHash, responseBody);
     }
-    
+
     public void clearProcessing(String idempotencyKey) {
-        if ("PROCESSING".equals(cache.get(idempotencyKey))) {
-            cache.remove(idempotencyKey);
-        }
+        cache.removeIfProcessing(idempotencyKey);
     }
 }

@@ -7,8 +7,8 @@ import com.coreissuer.common.util.CryptoUtils;
 import com.coreissuer.common.util.LuhnUtils;
 import org.springframework.stereotype.Component;
 
+import java.security.SecureRandom;
 import java.time.LocalDate;
-import java.util.Random;
 
 /**
  * Pattern: Factory
@@ -19,7 +19,8 @@ public class CardFactory {
 
     private static final String BIN_STANDARD = "411111";
     private static final String BIN_PREMIUM = "422222";
-    private static final Random RANDOM = new Random();
+    // CVVs are card credentials: they must not come from a predictable PRNG.
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     public Card create(CardTier tier, String pepper) {
         String bin = tier == CardTier.PREMIUM ? BIN_PREMIUM : BIN_STANDARD;

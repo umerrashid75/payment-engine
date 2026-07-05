@@ -1,10 +1,11 @@
 package com.coreissuer.common.util;
 
-import java.util.Random;
+import java.security.SecureRandom;
 
 public final class LuhnUtils {
 
-    private static final Random RANDOM = new Random();
+    // PANs are card credentials: they must not come from a predictable PRNG.
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private LuhnUtils() {
         // utility class

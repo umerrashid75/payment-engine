@@ -11,8 +11,8 @@ public class InternationalAuthStrategy implements AuthorizationStrategy {
 
     @Override
     public boolean supports(String currency, String merchantCountry) {
-        // Applies to everything not covered by domestic
-        return !("USD".equalsIgnoreCase(currency) && "US".equalsIgnoreCase(merchantCountry));
+        // Applies to every merchant outside the home country
+        return !"US".equalsIgnoreCase(merchantCountry);
     }
 
     @Override

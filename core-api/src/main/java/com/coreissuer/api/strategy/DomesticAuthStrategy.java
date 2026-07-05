@@ -9,12 +9,13 @@ import java.math.BigDecimal;
 @Component
 public class DomesticAuthStrategy implements AuthorizationStrategy {
 
-    private static final String DEFAULT_CURRENCY = "USD";
-    
+    private static final String HOME_COUNTRY = "US";
+
     @Override
     public boolean supports(String currency, String merchantCountry) {
-        // Simple logic for demonstration
-        return DEFAULT_CURRENCY.equalsIgnoreCase(currency) && "US".equalsIgnoreCase(merchantCountry);
+        // Routing is by merchant country; the currency is validated against the
+        // cardholder account before strategy selection.
+        return HOME_COUNTRY.equalsIgnoreCase(merchantCountry);
     }
 
     @Override

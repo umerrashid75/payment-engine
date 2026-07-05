@@ -51,5 +51,9 @@ bin/
 # Environment secrets
 .env
 
+# Generated reconciliation reports
+reports/
+core-api/reports/
+
 # Misc
 *.swp

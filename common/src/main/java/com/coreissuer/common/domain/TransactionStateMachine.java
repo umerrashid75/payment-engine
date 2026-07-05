@@ -1,6 +1,7 @@
 package com.coreissuer.common.domain;
 
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Set;
 
 /**
@@ -10,17 +11,18 @@ import java.util.Set;
 public class TransactionStateMachine {
 
     private static final EnumMap<TransactionStatus, Set<TransactionStatus>> TRANSITIONS = new EnumMap<>(TransactionStatus.class);
+    private static final Set<TransactionStatus> NO_TRANSITIONS = EnumSet.noneOf(TransactionStatus.class);
 
     static {
-        TRANSITIONS.put(TransactionStatus.AUTHORIZED, Set.of(TransactionStatus.CAPTURED, TransactionStatus.REVERSED));
-        TRANSITIONS.put(TransactionStatus.CAPTURED, Set.of(TransactionStatus.REFUNDED));
-        TRANSITIONS.put(TransactionStatus.REVERSED, Set.of());
-        TRANSITIONS.put(TransactionStatus.REFUNDED, Set.of());
-        TRANSITIONS.put(TransactionStatus.DECLINED, Set.of());
+        TRANSITIONS.put(TransactionStatus.AUTHORIZED, EnumSet.of(TransactionStatus.CAPTURED, TransactionStatus.REVERSED));
+        TRANSITIONS.put(TransactionStatus.CAPTURED, EnumSet.of(TransactionStatus.REFUNDED));
+        TRANSITIONS.put(TransactionStatus.REVERSED, NO_TRANSITIONS);
+        TRANSITIONS.put(TransactionStatus.REFUNDED, NO_TRANSITIONS);
+        TRANSITIONS.put(TransactionStatus.DECLINED, NO_TRANSITIONS);
     }
 
     public static void validateTransition(TransactionStatus current, TransactionStatus next) {
-        if (!TRANSITIONS.getOrDefault(current, Set.of()).contains(next)) {
+        if (!TRANSITIONS.getOrDefault(current, NO_TRANSITIONS).contains(next)) {
             throw new IllegalStateException("Invalid transaction state transition from " + current + " to " + next);
         }
     }
