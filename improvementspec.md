@@ -1,3 +1,4 @@
+
 # Improvement Spec — Implementation Guide for Claude Code
 
 This file is an executable spec. Each section is a self-contained task: what to change, where, the exact code to write, and how to verify. Work top-to-bottom; later tasks assume earlier ones are done.
